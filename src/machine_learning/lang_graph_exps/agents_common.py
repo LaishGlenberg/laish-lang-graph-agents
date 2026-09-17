@@ -16,6 +16,7 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from pydantic import SecretStr
 
 load_dotenv()
 
@@ -34,7 +35,7 @@ def get_llm(temperature: float = 0) -> ChatOpenAI:
     return ChatOpenAI(
         model=os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL),
         base_url=OPENROUTER_BASE_URL,
-        api_key=api_key,
+        api_key=SecretStr(api_key),
         temperature=temperature,
         default_headers={"X-Title": "langgraph-agents"},
     )
@@ -161,5 +162,6 @@ def run_subagent(subgraph, messages: list):
     out of the shared conversation is what stops dangling tool calls from
     confusing the other agents.
     """
-    out = subgraph.invoke({"messages": messages})
+    payload: MessagesState = {"messages": messages}
+    out = subgraph.invoke(payload)
     return out["messages"][-1]

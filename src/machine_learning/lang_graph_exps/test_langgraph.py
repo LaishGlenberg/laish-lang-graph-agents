@@ -31,6 +31,8 @@ from __future__ import annotations
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import ChatOllama
@@ -144,20 +146,20 @@ def chat(message: str, thread_id: str = "default") -> str:
 
     Reusing a `thread_id` keeps the conversation history (memory).
     """
-    config = {"configurable": {"thread_id": thread_id}}
-    result = graph.invoke({"messages": [("user", message)]}, config)
+    config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    result = graph.invoke({"messages": [HumanMessage(content=message)]}, config)
     return result["messages"][-1].content
 
 
 if __name__ == "__main__":
     # A fresh thread so reruns start clean.
-    thread = {"configurable": {"thread_id": "demo"}}
+    thread: RunnableConfig = {"configurable": {"thread_id": "demo"}}
 
     question = "What does RAG stand for, and is CUDA involved?"
     print(f"Q: {question}")
 
     # stream() shows the graph working step by step: agent -> tools -> agent.
-    for step in graph.stream({"messages": [("user", question)]}, thread):
+    for step in graph.stream({"messages": [HumanMessage(content=question)]}, thread):
         for node, update in step.items():
             print(f"\n[{node}]")
             for msg in update.get("messages", []):

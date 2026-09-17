@@ -23,8 +23,10 @@ Run:
 from __future__ import annotations
 
 import operator as op
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -63,8 +65,11 @@ def _next_peer(decider, name: str, state: SwarmState, answer, workers: dict) -> 
     remaining = [w for w in peers if w != "writer_agent"] or peers
 
     prompt = f"{_HANDOFF_RULES.format(name=name)}\nPeers still able to act: {remaining}."
-    decision = decider.invoke(
-        [{"role": "system", "content": prompt}, *state["messages"], answer]
+    decision = cast(
+        Handoff,
+        decider.invoke(
+            [{"role": "system", "content": prompt}, *state["messages"], answer]
+        ),
     )
 
     nxt = decision.next
@@ -101,15 +106,18 @@ def make_triage(llm, workers: dict):
     decider = llm.with_structured_output(Handoff)
 
     def triage(state: SwarmState) -> Command:
-        decision = decider.invoke(
-            [
-                {
-                    "role": "system",
-                    "content": "You dispatch work. Who should start: math_agent, "
-                    "research_agent, or writer_agent? Choose one.",
-                },
-                *state["messages"],
-            ]
+        decision = cast(
+            Handoff,
+            decider.invoke(
+                [
+                    {
+                        "role": "system",
+                        "content": "You dispatch work. Who should start: math_agent, "
+                        "research_agent, or writer_agent? Choose one.",
+                    },
+                    *state["messages"],
+                ]
+            ),
         )
         first = decision.next if decision.next in workers else "math_agent"
         print(f"  triage --handoff--> {first}")
@@ -140,8 +148,15 @@ def demo() -> None:
     task = "How much is 144 / 12, and what is LangGraph?"
 
     print(f"Task: {task}\n")
-    config = {"configurable": {"thread_id": "swarm-1"}, "recursion_limit": 25}
-    graph.invoke({"messages": [("user", task)], "history": []}, config)
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "swarm-1"},
+        "recursion_limit": 25,
+    }
+    initial: SwarmState = {
+        "messages": [HumanMessage(content=task)],
+        "history": [],
+    }
+    graph.invoke(initial, config)
 
     final = graph.get_state(config).values["messages"][-1]
     print(f"\nFinal answer:\n{final.content}")
@@ -171,7 +186,9 @@ def demo_command_fanout() -> None:
     print("=" * 70)
     builder = StateGraph(FanoutState)
     builder.add_node("dispatch", dispatch)
-    builder.add_node("echo", echo)
+    # `echo` reads a `Send` payload, not FanoutState; see the note in the
+    # map-reduce pattern on per-node input schemas.
+    builder.add_node("echo", echo)  # type: ignore[arg-type]
     builder.add_edge(START, "dispatch")
     builder.add_edge("echo", END)
     print(" ", builder.compile().invoke({"results": []}))

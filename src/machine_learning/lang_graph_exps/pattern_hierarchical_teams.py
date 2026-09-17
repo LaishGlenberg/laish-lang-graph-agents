@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -132,8 +134,12 @@ def demo() -> None:
     task = "How much is 144 / 12, and what is LangGraph?"
 
     print(f"Task: {task}\n")
-    config = {"configurable": {"thread_id": "chief-1"}}
-    graph.invoke({"messages": [("user", task)], "history": []}, config)
+    config: RunnableConfig = {"configurable": {"thread_id": "chief-1"}}
+    initial: TeamState = {
+        "messages": [HumanMessage(content=task)],
+        "history": [],
+    }
+    graph.invoke(initial, config)
 
     state = graph.get_state(config).values
     print(f"\nTeam history: {state['history']}")

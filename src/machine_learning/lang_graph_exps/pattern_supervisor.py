@@ -17,8 +17,10 @@ Run:
 from __future__ import annotations
 
 import operator as op
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -69,8 +71,11 @@ def make_supervisor_node(router, workers: dict):
             f"{_SUPERVISOR_PROMPT}\n\nWorkers who have not acted yet: {remaining}. "
             f"Choose exactly one of {options + ['FINISH']}."
         )
-        decision = router.invoke(
-            [{"role": "system", "content": prompt}, *state["messages"]]
+        decision = cast(
+            SupervisorDecision,
+            router.invoke(
+                [{"role": "system", "content": prompt}, *state["messages"]]
+            ),
         )
 
         # Second rail: reject an invalid or repeated choice and fall back safely.
@@ -127,10 +132,16 @@ def demo() -> None:
     task = "How much is 144 / 12, and what is LangGraph?"
 
     print(f"Task: {task}\n")
-    config = {"configurable": {"thread_id": "team-1"}, "recursion_limit": 25}
-    for step in graph.stream(
-        {"messages": [("user", task)], "next": "", "history": []}, config
-    ):
+    config: RunnableConfig = {
+        "configurable": {"thread_id": "team-1"},
+        "recursion_limit": 25,
+    }
+    initial: TeamState = {
+        "messages": [HumanMessage(content=task)],
+        "next": "",
+        "history": [],
+    }
+    for step in graph.stream(initial, config):
         for node in step:
             print(f"  ran: {node}")
 

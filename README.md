@@ -181,3 +181,34 @@ not read either of those, so it reports the imports as unresolved.
 (An alternative is to make `lang_graph_exps` a real package with an
 `__init__.py` and use fully-qualified `machine_learning.lang_graph_exps...`
 imports, but that makes running a single file directly less convenient.)
+
+## Static typing (why Pylance/Pyright complains, and the conventions we use)
+
+LangGraph and LangChain validate state at *runtime* (Pydantic coercion, TypedDict
+construction, message-tuple shorthand), which Pylance cannot see. The patterns
+now follow a few conventions so `pyright` reports **0 errors** on
+`src/machine_learning/lang_graph_exps`:
+
+- **`api_key=str`** -- `ChatOpenAI` annotates `api_key` as `SecretStr`; Pydantic
+  coerces a `str` at runtime but the checker can't. Wrap with
+  `SecretStr(api_key)` (`agents_common.get_llm`).
+- **`with_structured_output(...)` returns `dict`** -- the schema type is lost, so
+  `.invoke(...)` results are wrapped in `cast(SupervisorDecision, ...)` /
+  `cast(Handoff, ...)`.
+- **Message tuples** -- use `HumanMessage(content=...)` instead of the
+  `("user", ...)` shorthand, which isn't statically an `AnyMessage`.
+- **Graph inputs / config** -- annotate with the state TypedDict (`initial:
+  TeamState = {...}`) and `config: RunnableConfig = {...}` rather than letting
+  Pyright infer a bare `dict`.
+- **`Send`-payload nodes** -- a node fed by `Send` sees a different schema than
+  the graph state, which LangGraph's stubs can't express; those `add_node` calls
+  carry a documented `# type: ignore[arg-type]`.
+
+Run the checker with:
+
+```bash
+uv run --with pyright pyright src/machine_learning/lang_graph_exps
+```
+
+`pyrightconfig.json`'s `"//"` key is a JSON comment; Pyright prints a harmless
+"unrecognized setting" line for it.

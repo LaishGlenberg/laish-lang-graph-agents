@@ -74,7 +74,9 @@ def build_graph(workers: dict | None = None, llm=None):
     llm = llm or get_llm()
 
     builder = StateGraph(MapReduceState)
-    builder.add_node("worker", make_worker_node(workers))
+    # `Send` payloads (role/instruction) differ from MapReduceState; LangGraph's
+    # stubs can't express per-node input schemas, hence the ignore.
+    builder.add_node("worker", make_worker_node(workers))  # type: ignore[arg-type]
     builder.add_node("synthesizer", make_synthesizer(llm))
     # A conditional edge from START may return Send objects to fan out.
     builder.add_conditional_edges(START, fan_out, ["worker"])
@@ -91,7 +93,8 @@ def demo() -> None:
     task = "Give me a fact about Ollama and compute 25 * 4."
 
     print(f"Task: {task}\n")
-    result = graph.invoke({"task": task, "results": []})
+    payload: MapReduceState = {"task": task, "results": [], "final": ""}
+    result = graph.invoke(payload)
     print("Parallel worker outputs:")
     for chunk in result["results"]:
         print("  " + chunk.replace("\n", "\n  "))
