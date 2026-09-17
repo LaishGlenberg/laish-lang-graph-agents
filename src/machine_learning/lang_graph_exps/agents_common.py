@@ -95,9 +95,12 @@ def lookup_fact(topic: str) -> str:
 # ---------------------------------------------------------------------------
 # Subagent factory: each worker is its own compiled ReAct graph
 # ---------------------------------------------------------------------------
-def build_subagent(name: str, system_prompt: str, tools: list):
-    """Compile a ReAct subgraph: model <-> tools until it can answer."""
-    llm = get_llm()
+def build_subagent(name: str, system_prompt: str, tools: list, llm=None):
+    """Compile a ReAct subgraph: model <-> tools until it can answer.
+
+    Pass a fake `llm` to build the graph without contacting a real model.
+    """
+    llm = llm or get_llm()
     llm_with_tools = llm.bind_tools(tools) if tools else llm
 
     def call_model(state: MessagesState) -> dict:
@@ -119,34 +122,36 @@ def build_subagent(name: str, system_prompt: str, tools: list):
     return graph.compile()
 
 
-math_agent = build_subagent(
-    "math",
-    "You are a math specialist. Use the calculator tool for every arithmetic "
-    "step, then state the result plainly in one short sentence.",
-    [calculator],
-)
+def build_workers(llm=None) -> dict:
+    """Build the three specialist subagents.
 
-research_agent = build_subagent(
-    "research",
-    "You are a research specialist. ALWAYS call the lookup_fact tool before "
-    "answering, then quote the returned fact verbatim in one sentence.",
-    [lookup_fact],
-)
-
-writer_agent = build_subagent(
-    "writer",
-    "You are a writer. Write the final answer using ONLY the findings already "
-    "present in the conversation (numbers computed by math_agent and facts "
-    "looked up by research_agent). Address every part of the user's request. "
-    "If a finding is missing, say so rather than inventing it.",
-    [],
-)
-
-WORKERS = {
-    "math_agent": math_agent,
-    "research_agent": research_agent,
-    "writer_agent": writer_agent,
-}
+    Pass a fake `llm` in tests to exercise the graphs without any API calls.
+    """
+    return {
+        "math_agent": build_subagent(
+            "math",
+            "You are a math specialist. Use the calculator tool for every arithmetic "
+            "step, then state the result plainly in one short sentence.",
+            [calculator],
+            llm,
+        ),
+        "research_agent": build_subagent(
+            "research",
+            "You are a research specialist. ALWAYS call the lookup_fact tool before "
+            "answering, then quote the returned fact verbatim in one sentence.",
+            [lookup_fact],
+            llm,
+        ),
+        "writer_agent": build_subagent(
+            "writer",
+            "You are a writer. Write the final answer using ONLY the findings already "
+            "present in the conversation (numbers computed by math_agent and facts "
+            "looked up by research_agent). Address every part of the user's request. "
+            "If a finding is missing, say so rather than inventing it.",
+            [],
+            llm,
+        ),
+    }
 
 
 def run_subagent(subgraph, messages: list):

@@ -1,0 +1,8 @@
+{
+  "//": "These folders hold loose sibling modules imported by bare name (e.g. `import agents_common`, `import fakes`). At runtime they resolve because a directly-run script adds its own folder to sys.path, and pytest adds them via [tool.pytest.ini_options] pythonpath. Pylance/Pyright needs to be told the same, or it flags the imports as unresolved.",
+  "extraPaths": [
+    "src/machine_learning/lang_graph_exps",
+    "tests"
+  ],
+  "pythonVersion": "3.12"
+}

@@ -27,3 +27,13 @@ machine-learning = "machine_learning:main"
 [build-system]
 requires = ["uv_build>=0.12.10,<0.13.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+# Make the example modules and the shared test doubles importable.
+pythonpath = ["src/machine_learning/lang_graph_exps", "tests"]
+testpaths = ["tests"]

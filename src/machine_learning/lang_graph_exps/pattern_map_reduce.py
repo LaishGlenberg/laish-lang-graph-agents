@@ -27,7 +27,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from typing_extensions import TypedDict
 
-from agents_common import WORKERS, get_llm, run_subagent
+from agents_common import build_workers, get_llm, run_subagent
 
 
 class MapReduceState(TypedDict):
@@ -48,23 +48,34 @@ def fan_out(state: MapReduceState):
     ]
 
 
-def worker(state: dict) -> dict:
+def make_worker_node(workers: dict):
     """Runs *inside* the fan-out; invokes the matching compiled subagent."""
-    role = state["role"]
-    answer = run_subagent(WORKERS[role], [("user", state["instruction"])])
-    return {"results": [f"### {role}\n{answer.content}"]}
+
+    def worker(state: dict) -> dict:
+        role = state["role"]
+        answer = run_subagent(workers[role], [("user", state["instruction"])])
+        return {"results": [f"### {role}\n{answer.content}"]}
+
+    return worker
 
 
-def synthesizer(state: MapReduceState) -> dict:
-    joined = "\n\n".join(state["results"])
-    prompt = f"Combine these worker findings into one concise final answer.\n\n{joined}"
-    return {"final": get_llm().invoke(prompt).content}
+def make_synthesizer(llm):
+    def synthesizer(state: MapReduceState) -> dict:
+        joined = "\n\n".join(state["results"])
+        prompt = f"Combine these worker findings into one concise final answer.\n\n{joined}"
+        return {"final": llm.invoke(prompt).content}
+
+    return synthesizer
 
 
-def build_graph():
+def build_graph(workers: dict | None = None, llm=None):
+    """Compile the map-reduce graph. Inject `workers`/`llm` to test offline."""
+    workers = workers or build_workers(llm)
+    llm = llm or get_llm()
+
     builder = StateGraph(MapReduceState)
-    builder.add_node("worker", worker)
-    builder.add_node("synthesizer", synthesizer)
+    builder.add_node("worker", make_worker_node(workers))
+    builder.add_node("synthesizer", make_synthesizer(llm))
     # A conditional edge from START may return Send objects to fan out.
     builder.add_conditional_edges(START, fan_out, ["worker"])
     builder.add_edge("worker", "synthesizer")

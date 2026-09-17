@@ -25,7 +25,7 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from agents_common import WORKERS, get_llm, run_subagent
+from agents_common import build_workers, get_llm, run_subagent
 
 
 class TeamState(TypedDict):
@@ -41,8 +41,6 @@ class SupervisorDecision(BaseModel):
     )
 
 
-_supervisor_router = get_llm().with_structured_output(SupervisorDecision)
-
 _SUPERVISOR_PROMPT = (
     "You are a supervisor coordinating three workers: math_agent (arithmetic), "
     "research_agent (stored facts), and writer_agent (final write-up). "
@@ -53,32 +51,37 @@ _SUPERVISOR_PROMPT = (
 )
 
 
-def supervisor(state: TeamState) -> dict:
-    history = state.get("history", [])
+def make_supervisor_node(router, workers: dict):
+    """Build the supervisor node around an injected `router` (fake in tests)."""
 
-    # Deterministic safety rail: the LLM cannot loop forever. Once the writer
-    # has produced an answer, the team is done regardless of what it says next.
-    if history and history[-1] == "writer_agent":
-        print("  supervisor -> FINISH (writer has produced the answer)")
-        return {"next": "FINISH"}
+    def supervisor(state: TeamState) -> dict:
+        history = state.get("history", [])
 
-    remaining = [name for name in WORKERS if name not in history]
-    options = remaining or ["FINISH"]
-    prompt = (
-        f"{_SUPERVISOR_PROMPT}\n\nWorkers who have not acted yet: {remaining}. "
-        f"Choose exactly one of {options + ['FINISH']}."
-    )
-    decision = _supervisor_router.invoke(
-        [{"role": "system", "content": prompt}, *state["messages"]]
-    )
+        # Deterministic safety rail: the LLM cannot loop forever. Once the writer
+        # has produced an answer, the team is done regardless of what it says next.
+        if history and history[-1] == "writer_agent":
+            print("  supervisor -> FINISH (writer has produced the answer)")
+            return {"next": "FINISH"}
 
-    # Second rail: reject an invalid or repeated choice and fall back safely.
-    choice = decision.next
-    if choice != "FINISH" and choice not in remaining:
-        choice = remaining[0] if remaining else "FINISH"
+        remaining = [name for name in workers if name not in history]
+        options = remaining or ["FINISH"]
+        prompt = (
+            f"{_SUPERVISOR_PROMPT}\n\nWorkers who have not acted yet: {remaining}. "
+            f"Choose exactly one of {options + ['FINISH']}."
+        )
+        decision = router.invoke(
+            [{"role": "system", "content": prompt}, *state["messages"]]
+        )
 
-    print(f"  supervisor -> {choice}")
-    return {"next": choice, "history": [choice] if choice != "FINISH" else []}
+        # Second rail: reject an invalid or repeated choice and fall back safely.
+        choice = decision.next
+        if choice != "FINISH" and choice not in remaining:
+            choice = remaining[0] if remaining else "FINISH"
+
+        print(f"  supervisor -> {choice}")
+        return {"next": choice, "history": [choice] if choice != "FINISH" else []}
+
+    return supervisor
 
 
 def route_supervisor(state: TeamState) -> str:
@@ -96,10 +99,14 @@ def make_worker_node(name: str, subgraph):
     return run
 
 
-def build_graph():
+def build_graph(workers: dict | None = None, llm=None):
+    """Compile the supervisor graph. Inject `workers`/`llm` to test offline."""
+    workers = workers or build_workers(llm)
+    router = (llm or get_llm()).with_structured_output(SupervisorDecision)
+
     builder = StateGraph(TeamState)
-    builder.add_node("supervisor", supervisor)
-    for name, subgraph in WORKERS.items():
+    builder.add_node("supervisor", make_supervisor_node(router, workers))
+    for name, subgraph in workers.items():
         builder.add_node(name, make_worker_node(name, subgraph))
         builder.add_edge(name, "supervisor")
 
@@ -107,7 +114,7 @@ def build_graph():
     builder.add_conditional_edges(
         "supervisor",
         route_supervisor,
-        {**{name: name for name in WORKERS}, "FINISH": END},
+        {**{name: name for name in workers}, "FINISH": END},
     )
     return builder.compile(checkpointer=InMemorySaver())
 

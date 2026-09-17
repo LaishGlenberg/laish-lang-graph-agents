@@ -32,7 +32,7 @@ from langgraph.types import Command, Send
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
-from agents_common import WORKERS, get_llm, run_subagent
+from agents_common import build_workers, get_llm, run_subagent
 
 
 class SwarmState(TypedDict):
@@ -55,10 +55,10 @@ _HANDOFF_RULES = (
 )
 
 
-def _next_peer(decider, name: str, state: SwarmState, answer) -> Command:
+def _next_peer(decider, name: str, state: SwarmState, answer, workers: dict) -> Command:
     """Ask the LLM for the next peer, apply safety rails, and return a Command."""
     history = state.get("history", [])
-    peers = [w for w in WORKERS if w not in history and w != name]
+    peers = [w for w in workers if w not in history and w != name]
     # Keep the writer for last so the demo reliably exercises the specialists.
     remaining = [w for w in peers if w != "writer_agent"] or peers
 
@@ -78,9 +78,9 @@ def _next_peer(decider, name: str, state: SwarmState, answer) -> Command:
     )
 
 
-def make_agent_node(name: str, subgraph):
+def make_agent_node(name: str, subgraph, llm, workers: dict):
     """Wrap a compiled subagent; its routing is returned via `Command`."""
-    decider = get_llm().with_structured_output(Handoff)
+    decider = llm.with_structured_output(Handoff)
 
     def node(state: SwarmState) -> Command:
         answer = run_subagent(subgraph, state["messages"])
@@ -91,34 +91,42 @@ def make_agent_node(name: str, subgraph):
             print(f"  {name} --handoff--> DONE")
             return Command(goto=END, update={"messages": [answer], "history": [name]})
 
-        return _next_peer(decider, name, state, answer)
+        return _next_peer(decider, name, state, answer, workers)
 
     return node
 
 
-def triage(state: SwarmState) -> Command:
+def make_triage(llm, workers: dict):
     """Entry point: use `Command` to pick the first specialist."""
-    decider = get_llm().with_structured_output(Handoff)
-    decision = decider.invoke(
-        [
-            {
-                "role": "system",
-                "content": "You dispatch work. Who should start: math_agent, "
-                "research_agent, or writer_agent? Choose one.",
-            },
-            *state["messages"],
-        ]
-    )
-    first = decision.next if decision.next in WORKERS else "math_agent"
-    print(f"  triage --handoff--> {first}")
-    return Command(goto=first)
+    decider = llm.with_structured_output(Handoff)
+
+    def triage(state: SwarmState) -> Command:
+        decision = decider.invoke(
+            [
+                {
+                    "role": "system",
+                    "content": "You dispatch work. Who should start: math_agent, "
+                    "research_agent, or writer_agent? Choose one.",
+                },
+                *state["messages"],
+            ]
+        )
+        first = decision.next if decision.next in workers else "math_agent"
+        print(f"  triage --handoff--> {first}")
+        return Command(goto=first)
+
+    return triage
 
 
-def build_graph():
+def build_graph(workers: dict | None = None, llm=None):
+    """Compile the handoff graph. Inject `workers`/`llm` to test offline."""
+    workers = workers or build_workers(llm)
+    llm = llm or get_llm()
+
     builder = StateGraph(SwarmState)
-    builder.add_node("triage", triage)
-    for name, subgraph in WORKERS.items():
-        builder.add_node(name, make_agent_node(name, subgraph))
+    builder.add_node("triage", make_triage(llm, workers))
+    for name, subgraph in workers.items():
+        builder.add_node(name, make_agent_node(name, subgraph, llm, workers))
     builder.add_edge(START, "triage")
     # No conditional edges: every node routes itself by returning a Command.
     return builder.compile(checkpointer=InMemorySaver())
